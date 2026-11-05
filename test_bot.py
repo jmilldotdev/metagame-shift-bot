@@ -101,11 +101,22 @@ class ConfigurationAndCliTests(unittest.TestCase):
     def test_cli_exit_status(self):
         for arguments, result, expected in (
             (['bot.py', '--live'], {'blocked': 'unresolved'}, 1),
+            (['bot.py', '--live'], {'blocked': 'unresolved', 'stale_sheet': {'saved_at': None, 'error_type': 'OSError'}}, 1),
             (['bot.py', '--live'], {'role_adds': [], 'role_removes': []}, 0),
             (['bot.py'], {'dry_run': True}, 0),
         ):
             with self.subTest(arguments=arguments, result=result), patch('sys.argv', arguments), patch.object(bot, 'configuration', return_value={}), patch.object(bot, 'Cache'), patch.object(bot, 'reconcile', return_value=result), patch('builtins.print'):
                 self.assertEqual(bot.main(), expected)
+
+    def test_stale_sheet_exit_status(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(bot.os.environ, {'CACHE_FILE': str(Path(folder) / 'state.json')}):
+            cache = bot.Cache()
+            cache.data.update(sheet=SHEET, sheet_saved_at='2030-01-01T00:00:00+00:00')
+            cache.save()
+            with patch('sys.argv', ['bot.py']), patch.object(bot, 'urlopen', side_effect=OSError('offline')), patch.object(bot, 'load_mapping', return_value=[('Alice', 'alice'), ('Bob', 'bob')]), patch('builtins.print') as output:
+                self.assertEqual(bot.main(), 75)
+            result = json.loads(output.call_args.args[0])
+            self.assertEqual(result['stale_sheet'], {'saved_at': '2030-01-01T00:00:00+00:00', 'error_type': 'OSError'})
 
 
 if __name__ == '__main__':

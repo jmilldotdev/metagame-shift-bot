@@ -127,14 +127,21 @@ class Cache:
 
 
 def fetch_schedule(config, cache):
+    cache.stale_sheet = None
+    parsing = False
     try:
         with urlopen(config['sheet_url'], timeout=15) as response:
             text = response.read().decode('utf-8-sig')
+        parsing = True
         schedule = parse_schedule(text, config)
     except Exception as exc:
         if 'sheet' not in cache.data:
             raise RuntimeError('Sheet unavailable and no last-good snapshot') from exc
-        print(json.dumps({'warning': 'Using last-good sheet', 'saved_at': cache.data.get('sheet_saved_at'), 'error_type': type(exc).__name__}))
+        cache.stale_sheet = {'saved_at': cache.data.get('sheet_saved_at'), 'error_type': type(exc).__name__}
+        warning = {'warning': 'Using last-good sheet', **cache.stale_sheet}
+        if parsing:
+            warning['error_message'] = re.sub(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+', '[URL redacted]', str(exc))
+        print(json.dumps(warning))
         return parse_schedule(cache.data['sheet'], config)
     cache.data.update(sheet=text, sheet_saved_at=datetime.now(timezone.utc).isoformat())
     cache.save()
@@ -190,12 +197,13 @@ def plan(desired, current):
 
 def reconcile(config, cache, now, dry_run, current_handles=None):
     schedule = fetch_schedule(config, cache)
+    freshness = {'stale_sheet': cache.stale_sheet} if getattr(cache, 'stale_sheet', None) else {}
     handles, issues = match_names(schedule, load_mapping(), config.get('name_overrides', {}))
     active = active_at(schedule, now, config)
     if dry_run:
         desired = {handles[n] for n in active if n in handles}
         adds, removes = plan(desired, set(current_handles or []))
-        return {'time': now.astimezone(ZoneInfo(config['timezone'])).isoformat(), 'dry_run': True,
+        return {**freshness, 'time': now.astimezone(ZoneInfo(config['timezone'])).isoformat(), 'dry_run': True,
                 'role_adds_handles': adds, 'role_removes_handles': removes,
                 'announcement_preview': 'Now on shift: ' + ', '.join('@' + h for h in adds) if adds else None,
                 'note': 'Handles only; IDs unverified. Current roles are simulated, not fetched.', 'issues': issues}
@@ -225,7 +233,7 @@ def reconcile(config, cache, now, dry_run, current_handles=None):
     # Never remove a role from someone who might be an unresolved active volunteer.
     no_discord = {issue['name'] for issue in issues if issue['reason'] == 'no Discord'}
     if any(name not in ids and name not in no_discord for name in active):
-        return {'blocked': 'Active volunteers unresolved; no role mutations', 'issues': issues}
+        return {**freshness, 'blocked': 'Active volunteers unresolved; no role mutations', 'issues': issues}
     adds, removes = plan({ids[n] for n in active if n in ids}, current)
     for uid in removes:
         discord.request('DELETE', f'/guilds/{guild}/members/{uid}/roles/{role}')
@@ -237,7 +245,7 @@ def reconcile(config, cache, now, dry_run, current_handles=None):
     finally:
         if added:
             discord.request('POST', webhook + '?wait=true', {'content': 'Now on shift: ' + ', '.join('<@' + uid + '>' for uid in added), 'allowed_mentions': {'parse': [], 'users': added}}, webhook=True)
-    return {'role_adds': adds, 'role_removes': removes, 'issues': issues}
+    return {**freshness, 'role_adds': adds, 'role_removes': removes, 'issues': issues}
 
 
 def secrets():
@@ -277,7 +285,9 @@ def main():
     now = datetime.fromisoformat(args.at) if args.at else datetime.now(timezone.utc)
     result = reconcile(configuration(), Cache(), now, not args.live, [h for h in args.current_handles.split(',') if h])
     print(json.dumps(result, indent=2))
-    return 1 if args.live and result.get('blocked') else 0
+    if result.get('blocked'):
+        return 1
+    return 75 if result.get('stale_sheet') else 0
 
 
 if __name__ == '__main__':

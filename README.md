@@ -49,7 +49,7 @@ For a real reconcile using the configured credentials:
 python3 bot.py --live
 ```
 
-Live mode refuses simulated timestamps and role holders. It exits nonzero if active volunteers are unresolved (`blocked`), or if an exception occurs; successful runs exit zero. Dry-runs exit zero unless an exception occurs. Review `issues` in every result, not just the exit status.
+Live mode refuses simulated timestamps and role holders. It exits 1 if active volunteers are unresolved (`blocked`), 75 when using a stale sheet snapshot, or nonzero if an exception occurs; successful fresh-sheet runs exit zero. Dry-runs also exit 75 for stale snapshots. Review `issues` in every result, not just the exit status.
 
 Every invocation fetches and validates the sheet and saves a last-good snapshot in `.cache/state.json`. On a fetch or parse failure it logs a warning and uses that snapshot. Without one it fails before changing roles. Set `CACHE_FILE` to choose another local cache location. A stale snapshot has no automatic expiry: inspect warnings because schedule edits will not be reflected during an outage.
 
@@ -62,6 +62,8 @@ Use any scheduler that invokes `python3 bot.py --live` every minute, with the pr
 ```
 
 Arrange credentials securely rather than placing them in the crontab or committed scripts. Prevent overlapping runs using your scheduler's single-instance option or a lock, and monitor nonzero exits and warnings. Do not run multiple live schedulers against the same role. After the last shift, allow a successful reconcile to remove the final roles before stopping the schedule.
+
+When a sheet fetch or parse fails, reconciliation still uses the last-good snapshot and reports `stale_sheet` with its saved timestamp and error type. The CLI exits **75 (EX_TEMPFAIL)** for this degraded run (blocked runs still exit 1); configure monitoring to treat it as deferred rather than successful, and inspect warnings for URL-redacted parse errors.
 
 ## Optional AWS SAM deployment
 
