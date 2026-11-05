@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Metagame volunteer shift bot, REST-only, one reconcile per minute
+Parameters:
+  GuildId:
+    Type: String
+    Default: REPLACE_GUILD_ID
+  RoleId:
+    Type: String
+    Default: REPLACE_ON_SHIFT_ROLE_ID
+  SecretArn:
+    Type: String
+    Description: ARN of an existing Secrets Manager JSON secret with bot_token and webhook_url
+  DryRun:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+Resources:
+  CacheBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+  ShiftFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: bot.lambda_handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 55
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          GUILD_ID: !Ref GuildId
+          ROLE_ID: !Ref RoleId
+          SECRET_ARN: !Ref SecretArn
+          CACHE_BUCKET: !Ref CacheBucket
+          DRY_RUN: !Ref DryRun
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SecretArn
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject]
+              Resource: !Sub '${CacheBucket.Arn}/state.json'
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 60
+        MaximumRetryAttempts: 0
+      Events:
+        EveryMinute:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+            Enabled: true
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+              MaximumEventAgeInSeconds: 60
+  FunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ShiftFunction}'
+      RetentionInDays: 14
+Outputs:
+  FunctionName:
+    Value: !Ref ShiftFunction
+  CacheBucketName:
+    Value: !Ref CacheBucket

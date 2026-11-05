@@ -1,0 +1,9 @@
+.cache/
+__pycache__/
+*.pyc
+.env
+.aws-sam/
+samconfig.toml
+config.local.json
+data/names.csv
+STATE.md
